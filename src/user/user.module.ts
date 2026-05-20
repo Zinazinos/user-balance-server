@@ -9,7 +9,7 @@ import { PrismaModule } from '../prisma/prisma.module';
 @Module({
   imports: [
     PrismaModule,
-    CacheModule.register(), // Добавляем регистрацию кэша локально для этого модуля
+    CacheModule.register(),
   ],
   controllers: [UserController],
   providers: [UserService, UserCacheService],
