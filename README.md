@@ -1,98 +1,124 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# Web Server для управления балансом пользователя (NestJS + Prisma v7)
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+Компактный и высокопроизводительный сервис для списания баланса пользователя с защитой от race conditions, встроенным логом операций (Event Sourcing подход) и кэшированием.
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+## 🚀 Архитектурные особенности (Что сделано)
 
-## Description
+1. **Защита от Race Condition (Gonka данных)**: Вместо оптимистичной блокировки, приводящей к частым ошибкам в финтехе, используется пессимистичная блокировка строк базы данных (`SELECT ... FOR UPDATE`) на дефолтном уровне изоляции `READ COMMITTED`. Это выстраивает параллельные запросы к одному аккаунту в очередь, предотвращая двойные списания.
+2. **Финансовая точность (Decimal)**: Все математические операции с балансом выполняются через библиотеку `Prisma.Decimal` (`lessThan`, `minus`). Это полностью исключает погрешности округления дробных чисел, присущие стандартному JavaScript Float (IEEE 754).
+3. **Кэширование (Паттерн Cache-Aside)**: Чтение баланса оптимизировано с помощью `In-Memory Cache`. После успешного списания кэш инвалидируется и обновляется актуальным значением, что разгружает СУБД при частых GET-запросах.
+4. **Строгая валидация и типизация**: Входящие данные валидируются на лету через `class-validator` и глобальный `ValidationPipe`. В коде полностью отсутствуют небезопасные типы `any`.
+5. **Prisma v7 + Драйвер-адаптер**: Проект настроен на работу через производительный современный пул соединений `@prisma/adapter-pg`.
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+---
 
-## Project setup
+## 🛠️ Быстрый запуск
 
-```bash
-$ npm install
+### 1. Окружение и БД
+В корне проекта уже подготовлены файлы настроек. Убедитесь, что ваш файл `.env` содержит корректную строку подключения:
+```env
+DATABASE_URL="postgresql://postgres:qwerty@localhost:5432/user-balance"
+PORT=3000
 ```
 
-## Compile and run the project
-
+Поднимите базу данных PostgreSQL одной командой через Docker:
 ```bash
-# development
-$ npm run start
-
-# watch mode
-$ npm run start:dev
-
-# production mode
-$ npm run start:prod
+docker-compose up -d
 ```
 
-## Run tests
-
+### 2. Установка зависимостей и генерация клиента
 ```bash
-# unit tests
-$ npm run test
+# Установка пакетов
+npm install
 
-# e2e tests
-$ npm run test:e2e
-
-# test coverage
-$ npm run test:cov
+# Генерация типов Prisma Client под установленный pg-адаптер
+npx prisma generate
 ```
 
-## Deployment
-
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
-
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
-
+### 3. Сидирование (Создание юзера id=1)
+По условиям ТЗ в базе должен быть пользователь с `id = 1`. Запустите автоматический скрипт инициализации:
 ```bash
-$ npm install -g @nestjs/mau
-$ mau deploy
+npx prisma db seed
 ```
+*Скрипт очистит таблицы, создаст пользователя `id: 1` с балансом `$1000.00` и зафиксирует стартовую запись пополнения (`credit`) в истории.*
 
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
+### 4. Запуск сервера
+```bash
+npm run start:dev
+```
+Сервер запустится на [http://localhost:3000](http://localhost:3000).
 
-## Resources
+---
 
-Check out a few resources that may come in handy when working with NestJS:
+## 📑 Гайд по API эндпоинтам (Ручки)
 
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
+### 1. Списание баланса (Покупка предмета)
+Используется для безопасного уменьшения баланса пользователя и записи операции в лог истории.
 
-## Support
+*   **URL**: `/users/debit`
+*   **Метод**: `POST`
+*   **Headers**: `Content-Type: application/json`
+*   **Тело запроса (JSON)**:
+    ```json
+    {
+      "userId": 1,
+      "amount": 100.00
+    }
+    ```
 
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
+*   **Успешный ответ (200 OK)**:
+    ```json
+    {
+      "success": true,
+      "message": "Списание \$100.00 выполнено успешно",
+      "userId": 1,
+      "balance": 900,
+      "recentHistory": [
+        {
+          "id": 2,
+          "userId": 1,
+          "action": "debit",
+          "amount": "100.00",
+          "ts": "2026-05-20T08:45:00.000Z"
+        },
+        {
+          "id": 1,
+          "userId": 1,
+          "action": "credit",
+          "amount": "1000.00",
+          "ts": "2026-05-20T08:40:00.000Z"
+        }
+      ]
+    }
+    ```
 
-## Stay in touch
+*   **Ошибки валидации (400 Bad Request)**: Возникает, если сумма отрицательная или ID не является целым числом.
+*   **Ошибка бизнес-логики (400 Bad Request)**: Возникает, если запрашиваемая сумма превышает текущий баланс (`Недостаточно средств. Текущий баланс: $...`).
 
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
+---
 
-## License
+### 2. Получение текущего баланса (С демонстрацией кэша)
+Эндпоинт для мгновенного чтения баланса без блокировки строк БД. Позволяет наглядно увидеть работу кэширования.
 
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+*   **URL**: `/users/:id/balance`
+*   **Метод**: `GET`
+
+*   **Первый запрос (Ответ из БД)**:
+    ```json
+    {
+      "userId": 1,
+      "balance": 900,
+      "fromCache": false
+    }
+    ```
+    *В консоли приложения появится лог: `[UserService] Баланс пользователя 1 взят из БАЗЫ ДАННЫХ`.*
+
+*   **Повторный запрос в течение 5 минут (Ответ из Кэша)**:
+    ```json
+    {
+      "userId": 1,
+      "balance": 900,
+      "fromCache": true
+    }
+    ```
+    *В консоли приложения появится лог: `[UserService] Баланс пользователя 1 взят из КЭША`.*
