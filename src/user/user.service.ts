@@ -1,14 +1,14 @@
+// src/user/user.service.ts
 import { 
   Injectable, 
   BadRequestException, 
   NotFoundException, 
   InternalServerErrorException, 
-  HttpException,
-  Logger 
+  Logger, 
+  HttpException
 } from '@nestjs/common';
-import { Inject } from '@nestjs/common';
-import { CACHE_MANAGER, Cache } from '@nestjs/cache-manager';
 import { PrismaService } from '../prisma/prisma.service';
+import { UserCacheService } from './user-cache.service';
 import { DebitBalanceDto } from './dto/debit-balance-dto';
 import { Prisma } from '@prisma/client';
 
@@ -23,7 +23,7 @@ export class UserService {
 
   constructor(
     private readonly prisma: PrismaService,
-    @Inject(CACHE_MANAGER) private cacheManager: Cache
+    private readonly userCache: UserCacheService
   ) {}
 
   async debitBalance(dto: DebitBalanceDto) {
@@ -32,15 +32,15 @@ export class UserService {
     if (amount <= 0) {
       throw new BadRequestException('Сумма списания должна быть больше нуля');
     }
+    let result;
 
     try {
-      const result = await this.prisma.$transaction(async (tx) => {
+      result = await this.prisma.$transaction(async (tx) => {
         const users = await tx.$queryRaw<LockUserResult[]>`
           SELECT id, balance FROM users WHERE id = ${userId} FOR UPDATE
         `;
         
         const user = users[0];
-
         if (!user) {
           throw new NotFoundException(`Пользователь с ID ${userId} не найден`);
         }
@@ -79,15 +79,7 @@ export class UserService {
           balance: updatedUser.balance.toNumber(),
           recentHistory: updatedUser.history,
         };
-      }, {
-        timeout: 5000 
-      });
-
-      const cacheKey = `user_balance_${userId}`;
-      await this.cacheManager.set(cacheKey, result.balance, 300000);
-      this.logger.log(`Кэш для пользователя ${userId} успешно обновлен: ${result.balance}`);
-
-      return result;
+      }, { timeout: 5000 });
 
     } catch (error) {
       if (error instanceof HttpException) {
@@ -96,14 +88,14 @@ export class UserService {
       this.logger.error(`Ошибка при списании баланса для пользователя ${userId}:`, error instanceof Error ? error.stack : error);
       throw new InternalServerErrorException('Ошибка при обработке транзакции списания');
     }
+
+    await this.userCache.setBalance(userId, result.balance);
+    return result;
   }
 
   async getBalance(userId: number) {
-    const cacheKey = `user_balance_${userId}`;
-    
-    const cachedBalance = await this.cacheManager.get<number>(cacheKey);
-    if (cachedBalance !== undefined && cachedBalance !== null) {
-      this.logger.log(`Баланс пользователя ${userId} взят из КЭША`);
+    const cachedBalance = await this.userCache.getBalance(userId);
+    if (cachedBalance !== null) {
       return { userId, balance: cachedBalance, fromCache: true };
     }
 
@@ -118,7 +110,7 @@ export class UserService {
 
     const balanceNumber = Number(user.balance);
     
-    await this.cacheManager.set(cacheKey, balanceNumber, 300000);
+    await this.userCache.setBalance(userId, balanceNumber);
 
     return { userId, balance: balanceNumber, fromCache: false };
   }
